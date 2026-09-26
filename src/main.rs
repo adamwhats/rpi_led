@@ -15,8 +15,9 @@ const TIMEOUT: Option<Duration> = Some(Duration::from_secs(1));
 fn main() {
 
     // Initialise sACN receiver
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ACN_SDT_MULTICAST_PORT);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), ACN_SDT_MULTICAST_PORT);
     let mut dmx_rcv = SacnReceiver::with_ip(addr, None).unwrap();
+    dmx_rcv.listen_universes(&[UNIVERSE1]).unwrap();
 
     // Initialise LED controller
     let mut controller = ControllerBuilder::new()
@@ -36,7 +37,6 @@ fn main() {
 
     // Main loop
     loop {
-        dmx_rcv.listen_universes(&[UNIVERSE1]).unwrap();
         match dmx_rcv.recv(TIMEOUT) {
             Err(_e) => {
                 for led in controller.leds_mut(0) {
@@ -44,7 +44,7 @@ fn main() {
                 }
             }
             Ok(p) => {
-                for (led, chunk) in controller.leds_mut(0).iter_mut().zip(p[0].values.chunks_exact(3)) {
+                for (led, chunk) in controller.leds_mut(0).iter_mut().zip(p[0].values[1..].chunks_exact(3)) {
                     led[0] = chunk[0];
                     led[1] = chunk[2];
                     led[2] = chunk[1];
