@@ -1,0 +1,10 @@
+[package]
+name = "rpi_led"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rs_ws281x = "0.5.1"
+sacn = "0.10.0"
+ws2812-spi = "0.5.0"
+
