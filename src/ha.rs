@@ -84,6 +84,7 @@ fn on_connect(client: &Client, on: bool) {
             "name": "Office LEDs",
             "manufacturer": "Raspberry Pi",
             "model": "Pi Zero W + WS2812",
+            "suggested_area": "Office",
         },
     });
 
