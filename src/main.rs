@@ -1,3 +1,4 @@
+mod e131;
 mod ha;
 mod noise_map;
 
@@ -6,10 +7,7 @@ use rs_ws281x::Controller;
 use rs_ws281x::ControllerBuilder;
 use rs_ws281x::StripType;
 
-use sacn::packet::ACN_SDT_MULTICAST_PORT;
-use sacn::receive::SacnReceiver;
-
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use noise_map::NoiseMap;
@@ -19,14 +17,15 @@ const NUM_LEDS: i32 = 32;
 
 // The PC counts as gone after this long without a packet (the sACN data loss timeout)
 const PC_TIMEOUT: Duration = Duration::from_millis(2500);
+// Another sender may take over once the followed one has been quiet this long.
+// Longer than OpenRGB's keepalive interval, so a static colour isn't interrupted.
+const SENDER_SWITCH_AFTER: Duration = Duration::from_millis(1500);
 const FRAME_INTERVAL: Duration = Duration::from_micros(1_000_000 / 60);
 
 fn main() {
 
-    // Initialise sACN receiver
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), ACN_SDT_MULTICAST_PORT);
-    let mut dmx_rcv = SacnReceiver::with_ip(addr, None).unwrap();
-    dmx_rcv.listen_universes(&[UNIVERSE1]).unwrap();
+    // Initialise E1.31 receiver
+    let mut dmx_rcv = e131::Receiver::new(UNIVERSE1);
 
     // Initialise LED controller
     let mut controller = ControllerBuilder::new()
@@ -46,6 +45,10 @@ fn main() {
     let ha = ha::Ha::start();
     let mut noise = NoiseMap::new();
     let mut frame = [[0u8; 3]; NUM_LEDS as usize];
+    let mut pc_frame = [[0u8; 3]; NUM_LEDS as usize];
+    // Two OpenRGB instances on the PC stream different frames, which flickers
+    // if both are shown, so only one sender is followed at a time
+    let mut sender: Option<(SocketAddr, Instant)> = None;
     let mut last_pc_packet: Option<Instant> = None;
     let mut pc_streaming = false;
     let mut next_frame = Instant::now();
@@ -53,9 +56,22 @@ fn main() {
     // Main loop: wait for E1.31 until the next local frame is due
     loop {
         let timeout = next_frame.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
-        let packet = dmx_rcv.recv(Some(timeout)).ok();
-        if packet.is_some() {
-            last_pc_packet = Some(Instant::now());
+        let mut new_pc_frame = false;
+        if let Some(packet) = dmx_rcv.recv(timeout) {
+            let now = Instant::now();
+            last_pc_packet = Some(now);
+            let followed = sender.map(|(addr, _)| addr);
+            let followed_quiet = sender.is_none_or(|(_, t)| t.elapsed() > SENDER_SWITCH_AFTER);
+            if followed == Some(packet.sender) || followed_quiet {
+                if followed != Some(packet.sender) {
+                    println!("Following E1.31 sender {}", packet.sender);
+                }
+                sender = if packet.terminated { None } else { Some((packet.sender, now)) };
+                for (px, chunk) in pc_frame.iter_mut().zip(packet.dmx.chunks_exact(3)) {
+                    *px = [chunk[0], chunk[1], chunk[2]];
+                }
+                new_pc_frame = !packet.terminated;
+            }
         }
 
         // The PC starting or stopping its stream switches the light on or off;
@@ -74,11 +90,8 @@ fn main() {
                 next_frame = Instant::now() + Duration::from_millis(100);
             }
         } else if pc_streaming {
-            if let Some(dmx) = packet.as_ref().and_then(|p| p.first()) {
-                for (px, chunk) in frame.iter_mut().zip(dmx.values[1..].chunks_exact(3)) {
-                    *px = [chunk[0], chunk[1], chunk[2]];
-                }
-                show(&mut controller, &frame);
+            if new_pc_frame {
+                show(&mut controller, &pc_frame);
             }
             // Wake at least once a second to notice the PC going quiet
             next_frame = Instant::now() + Duration::from_secs(1);
