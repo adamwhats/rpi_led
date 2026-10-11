@@ -103,10 +103,11 @@ fn main() {
     }
 }
 
-// Takes RGB; the strip's wiring needs the channels swapped as below
+// Takes RGB. rs_ws281x's raw LED layout is [B, G, R, W] (the C library's
+// 0xWWRRGGBB, little-endian); the library reorders to the strip's GRB itself.
 fn show(controller: &mut Controller, frame: &[[u8; 3]]) {
     for (led, &[r, g, b]) in controller.leds_mut(0).iter_mut().zip(frame) {
-        *led = [r, b, g, 0];
+        *led = [b, g, r, 0];
     }
     let _ = controller.render();
 }
